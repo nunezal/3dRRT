@@ -18,6 +18,7 @@
 #include <vtkInteractorStyleTrackballCamera.h>
 #include <vtkCallbackCommand.h>
 #include <vtkCommand.h>
+#include <thread>
 
 // Structure to represent a 3D point
 struct Point3D
@@ -71,9 +72,8 @@ struct Point3D
 
     bool operator==(const Point3D &other) const
     {
-        return (std::round(x * 10) / 10 == std::round(other.x * 10) / 10 &&
-                std::round(y * 10) / 10 == std::round(other.y * 10) / 10 &&
-                std::round(z * 10) / 10 == std::round(other.z * 10) / 10);
+        // More lenient equality check - points are equal if they are within 0.5 units of each other
+        return distanceTo(other) < 0.5;
     }
 
     friend std::ostream &operator<<(std::ostream &os, const Point3D &p)
@@ -226,7 +226,6 @@ public:
 
         // Track the last valid point (start with the new potential point)
         Point3D lastValidPoint = potentialNode;
-        bool collisionDetected = false;
 
         // Interpolate path and check for collision at waypoints
         int interpCount = 5; // Number of interpolation points
@@ -238,7 +237,6 @@ public:
 
             if (isCollided(interpPoint))
             {
-                collisionDetected = true;
                 // If we're at the first point, we can't extend at all
                 if (i == 0)
                 {
@@ -278,6 +276,8 @@ public:
     {
         if (!visualize)
             return;
+
+        std::cout << "Initializing visualization..." << std::endl;
 
         renderer = vtkSmartPointer<vtkRenderer>::New();
         renderWindow = vtkSmartPointer<vtkRenderWindow>::New();
@@ -320,6 +320,8 @@ public:
         // Initialize interactor
         interactor->Initialize();
         renderWindow->Render();
+
+        std::cout << "Visualization window should be visible now" << std::endl;
     }
 
     // Add a sphere to the visualization
@@ -404,9 +406,16 @@ public:
     {
         if (!visualize)
             return;
+
+        // Make sure the window is visible
+        renderWindow->SetWindowName("3D RRT Path Planning - In Progress");
         renderWindow->Render();
+
         // Process events to keep UI responsive
         interactor->ProcessEvents();
+
+        // Small delay to allow visualization to be seen
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
     // Generate the RRT path
@@ -492,17 +501,27 @@ public:
                         addLine(nearestPoint, newNode, 0.0, 0.0, 0.0, 0.8);
                     }
 
-                    // Update every 10 iterations for performance
-                    if (i % 10 == 0)
+                    // Update visualization more frequently
+                    if (i % 5 == 0)
                     {
                         updateVisualization();
                     }
                 }
 
                 // Check if reached goal
-                if (newNode == goalPoint)
+                if (newNode == goalPoint || newNode.distanceTo(goalPoint) < 1.0)
                 {
                     std::cout << "Goal reached at iteration " << i << "!" << std::endl;
+                    // Add a direct connection to the goal for visualization
+                    if (newNode.distanceTo(goalPoint) < 1.0 && !(newNode == goalPoint))
+                    {
+                        vertices.push_back(goalPoint);
+                        edges.push_back(Edge(vertices.size() - 2, vertices.size() - 1));
+                        if (visualize)
+                        {
+                            addLine(newNode, goalPoint, 1.0, 0.0, 0.0, 2.0); // Red final connection
+                        }
+                    }
                     break;
                 }
             }
@@ -528,40 +547,49 @@ public:
     std::vector<Point3D> findPath()
     {
         std::vector<Point3D> path;
+        bool goalFound = false;
+        int goalIndex = -1;
 
-        // Check if the goal was reached
-        for (const auto &vertex : vertices)
+        // Check if the goal was reached or if we got close enough
+        for (size_t i = 0; i < vertices.size(); i++)
         {
-            if (vertex == goalPoint)
+            if (vertices[i] == goalPoint || vertices[i].distanceTo(goalPoint) < 1.0)
             {
-                // Goal was reached, find the path
-                int currentIndex = vertices.size() - 1;
+                // Goal was reached or we got close enough
+                goalFound = true;
+                goalIndex = i;
+                break;
+            }
+        }
 
-                // Trace back from goal to start
-                while (currentIndex != 0)
+        if (goalFound)
+        {
+            // Trace back from goal to start
+            int currentIndex = goalIndex;
+
+            while (currentIndex != 0)
+            {
+                path.push_back(vertices[currentIndex]);
+
+                // Find the parent node
+                for (const auto &edge : edges)
                 {
-                    path.push_back(vertices[currentIndex]);
-
-                    // Find the parent node
-                    for (const auto &edge : edges)
+                    if (edge.to == currentIndex)
                     {
-                        if (edge.to == currentIndex)
-                        {
-                            currentIndex = edge.from;
-                            break;
-                        }
+                        currentIndex = edge.from;
+                        break;
                     }
                 }
-
-                // Add start point
-                path.push_back(startPoint);
-
-                // Reverse to get path from start to goal
-                std::reverse(path.begin(), path.end());
-
-                std::cout << "Path found with " << path.size() << " waypoints!" << std::endl;
-                return path;
             }
+
+            // Add start point
+            path.push_back(startPoint);
+
+            // Reverse to get path from start to goal
+            std::reverse(path.begin(), path.end());
+
+            std::cout << "Path found with " << path.size() << " waypoints!" << std::endl;
+            return path;
         }
 
         std::cout << "Path did not reach goal, try increasing iterations" << std::endl;
@@ -591,7 +619,7 @@ public:
 
     vtkAnimationCallback() : Camera(nullptr), Renderer(nullptr), Angle(0) {}
 
-    void Execute(vtkObject *caller, unsigned long eventId, void *vtkNotUsed(callData)) override
+    void Execute(vtkObject *vtkNotUsed(caller), unsigned long eventId, void *vtkNotUsed(callData)) override
     {
         if (vtkCommand::TimerEvent == eventId)
         {
@@ -601,8 +629,8 @@ public:
             {
                 double elevation = 10.0;
                 Camera->SetPosition(
-                    150.0 * cos(vtkMath::RadiansFromDegrees(Angle)),
-                    150.0 * sin(vtkMath::RadiansFromDegrees(Angle)),
+                    150.0 * cos(vtkMath::RadiansFromDegrees(static_cast<double>(Angle))),
+                    150.0 * sin(vtkMath::RadiansFromDegrees(static_cast<double>(Angle))),
                     50.0);
                 Camera->SetViewUp(0, 0, 1);
 
@@ -633,7 +661,7 @@ void startRotationAnimation(vtkSmartPointer<vtkRenderer> renderer,
 
     // Create a timer for animation
     interactor->Initialize();
-    int timerId = interactor->CreateRepeatingTimer(30); // 30ms timer (approximately 33 fps)
+    interactor->CreateRepeatingTimer(30); // 30ms timer (approximately 33 fps)
     interactor->AddObserver(vtkCommand::TimerEvent, animationCallback);
 
     // Start the interaction
@@ -677,6 +705,7 @@ int main(int argc, char *argv[])
     rrt.setGoalPoint(Point3D(35, 35, 35));
     rrt.setBranchLength(1.0);
     rrt.setSphereRadius(1.5);
+    rrt.setMaxIterations(5000);
     rrt.setGoalSampleFreq(goalFreq);
     rrt.setDynamicSampling(dynamicSampling);
     rrt.setVisualization(visualize);
@@ -687,6 +716,7 @@ int main(int argc, char *argv[])
     // Print configuration
     std::cout << "Configuration:" << std::endl;
     std::cout << "- Number of obstacles: " << obstacles << std::endl;
+    std::cout << "- Maximum iterations: 5000" << std::endl;
     if (dynamicSampling)
     {
         std::cout << "- Dynamic goal sampling: Enabled (starts at 10, decreases to 2)" << std::endl;
