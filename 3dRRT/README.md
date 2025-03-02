@@ -132,3 +132,90 @@ You can modify the following parameters:
 ## License
 
 This project is open source and available under the MIT License.
+
+## C++ Implementation
+
+### Requirements
+
+To build and run the C++ implementation, you'll need:
+
+- CMake (version 3.12+)
+- C++ compiler with C++17 support (GCC, Clang, or MSVC)
+- VTK (Visualization Toolkit) library
+
+### Installation of Dependencies
+
+#### Ubuntu/Debian
+
+```bash
+sudo apt-get update
+sudo apt-get install cmake build-essential
+sudo apt-get install libvtk9-dev # or libvtk7-dev depending on your distribution
+```
+
+#### macOS (using Homebrew)
+
+```bash
+brew install cmake
+brew install vtk
+```
+
+#### Windows
+
+- Install [CMake](https://cmake.org/download/)
+- Install [Visual Studio](https://visualstudio.microsoft.com/downloads/) with C++ support
+- Download and install [VTK](https://vtk.org/download/)
+
+### Building and Running
+
+1. Create a build directory:
+
+```bash
+mkdir -p 3dRRT/build
+cd 3dRRT/build
+```
+
+2. Configure and build the project:
+
+```bash
+cmake ..
+make
+```
+
+3. Run the executable:
+
+```bash
+./bin/rrt3d
+```
+
+### Command Line Options
+
+The C++ implementation supports the same command line options as the Python version:
+
+- `--no-vis`: Disable real-time visualization during search
+- `--goal-freq <n>`: Set goal sampling frequency (default: 5)
+- `--obstacles <n>`: Set number of obstacles (default: 50)
+- `--dynamic-sampling`: Enable dynamic goal sampling
+
+Example:
+
+```bash
+./bin/rrt3d --dynamic-sampling --obstacles 30
+```
+
+### Interactive Controls
+
+- **Rotate view**: Click and drag with the mouse
+- **Zoom**: Right-click and drag up/down or use the scroll wheel
+- **Pan**: Middle-click and drag
+- **Exit**: Press 'e' key
+
+## Performance Comparison
+
+The C++ implementation offers several advantages over the Python version:
+
+1. **Speed**: Significantly faster execution, especially for complex scenes
+2. **Memory usage**: Lower memory footprint for large environments
+3. **Visualization performance**: Smoother interactive rendering with VTK
+
+However, the Python implementation may be easier to modify and extend for rapid prototyping.
