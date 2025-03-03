@@ -20,12 +20,20 @@
 #include <vtkCommand.h>
 #include <thread>
 
-// Structure to represent a 3D point
+// Structure to represent a color
+struct Color
+{
+    double r, g, b;
+    Color(double r = 0, double g = 0, double b = 0) : r(r), g(g), b(b) {}
+};
+
+// Structure to represent a 3D point with color
 struct Point3D
 {
     double x, y, z;
+    Color color; // Add color property
 
-    Point3D(double x = 0, double y = 0, double z = 0) : x(x), y(y), z(z) {}
+    Point3D(double x = 0, double y = 0, double z = 0) : x(x), y(y), z(z), color(0.3, 0.3, 0.8) {}
 
     double distanceTo(const Point3D &other) const
     {
@@ -90,18 +98,31 @@ struct Edge
     Edge(int from = 0, int to = 0) : from(from), to(to) {}
 };
 
+// List of predefined colors
+std::vector<Color> obstacleColors = {
+    Color(0.3, 0.3, 0.8), // Blue
+    Color(0.8, 0.3, 0.3), // Red
+    Color(0.3, 0.8, 0.3), // Green
+    Color(0.8, 0.8, 0.3), // Yellow
+    Color(0.8, 0.3, 0.8), // Purple
+    Color(0.3, 0.8, 0.8), // Cyan
+    Color(0.6, 0.4, 0.2), // Brown
+    Color(0.5, 0.5, 0.5), // Gray
+};
+
 // Class for RRT algorithm
 class RRT3D
 {
 private:
-    // Environment parameters
-    double boundary[6]; // xmin, xmax, ymin, ymax, zmin, zmax
+    // Boundary [xmin, xmax, ymin, ymax, zmin, zmax]
+    double boundary[6] = {0, 40, 0, 40, 0, 40};
+
     double branchLength;
     int maxIterations;
     std::vector<Point3D> spheres;
     double sphereRadius;
 
-    // RRT parameters
+    // Start and goal
     Point3D startPoint;
     Point3D goalPoint;
     std::vector<Point3D> vertices;
@@ -117,8 +138,15 @@ private:
     vtkSmartPointer<vtkRenderWindow> renderWindow;
     vtkSmartPointer<vtkRenderWindowInteractor> interactor;
 
-    // Random number generation
+    // Random number generator
     std::mt19937 rng;
+
+    // Get a random color from the list
+    Color getRandomColor()
+    {
+        std::uniform_int_distribution<int> colorDist(0, obstacleColors.size() - 1);
+        return obstacleColors[colorDist(rng)];
+    }
 
 public:
     RRT3D() : branchLength(1.0),
@@ -130,15 +158,6 @@ public:
               finalSampleFreq(2),
               visualize(true)
     {
-
-        // Set default boundaries
-        boundary[0] = 0;  // xmin
-        boundary[1] = 40; // xmax
-        boundary[2] = 0;  // ymin
-        boundary[3] = 40; // ymax
-        boundary[4] = 0;  // zmin
-        boundary[5] = 40; // zmax
-
         // Initialize random number generator with time-based seed
         unsigned seed = std::chrono::system_clock::now().time_since_epoch().count();
         rng = std::mt19937(seed);
@@ -167,14 +186,26 @@ public:
     void generateRandomObstacles(int numObstacles)
     {
         spheres.clear();
-        std::uniform_real_distribution<double> xDist(10, 34);
-        std::uniform_real_distribution<double> yDist(10, 34);
-        std::uniform_real_distribution<double> zDist(10, 34);
+
+        // Set random seed based on current time
+        rng.seed(std::chrono::system_clock::now().time_since_epoch().count());
+
+        std::uniform_real_distribution<double> xDist(boundary[0] + 5, boundary[1] - 5);
+        std::uniform_real_distribution<double> yDist(boundary[2] + 5, boundary[3] - 5);
+        std::uniform_real_distribution<double> zDist(boundary[4] + 5, boundary[5] - 5);
 
         for (int i = 0; i < numObstacles; i++)
         {
             Point3D sphere(xDist(rng), yDist(rng), zDist(rng));
-            spheres.push_back(sphere);
+
+            // Assign a random color to the obstacle
+            sphere.color = getRandomColor();
+
+            // Ensure obstacles are not too close to start or goal
+            if (sphere.distanceTo(startPoint) > 5 && sphere.distanceTo(goalPoint) > 5)
+            {
+                spheres.push_back(sphere);
+            }
         }
     }
 
@@ -233,32 +264,26 @@ public:
         for (int i = 0; i <= interpCount; i++)
         {
             double t = static_cast<double>(i) / interpCount;
-            Point3D interpPoint = nearestPoint + ((potentialNode - nearestPoint) * t);
+            Point3D interpPoint = nearestPoint + (dir * branchLength * t);
 
             if (isCollided(interpPoint))
             {
                 // If we're at the first point, we can't extend at all
                 if (i == 0)
                 {
-                    return {false, nearestPoint};
+                    return std::make_pair(false, nearestPoint);
                 }
+
                 // Otherwise, use the last valid point
-                return {true, lastValidPoint};
+                return std::make_pair(true, lastValidPoint);
             }
 
             // Update last valid point
             lastValidPoint = interpPoint;
-
-            // Check if the point is very close to the random sample
-            if (interpPoint == randPoint)
-            {
-                // If we've reached the random sample without collision
-                return {true, randPoint};
-            }
         }
 
-        // If we've reached here, the entire extension is valid
-        return {true, potentialNode};
+        // No collision detected, can extend to the full branch length
+        return std::make_pair(true, potentialNode);
     }
 
     // Generate random point in the workspace
@@ -282,8 +307,8 @@ public:
         renderer = vtkSmartPointer<vtkRenderer>::New();
         renderWindow = vtkSmartPointer<vtkRenderWindow>::New();
         renderWindow->AddRenderer(renderer);
-        renderWindow->SetSize(1000, 800);
-        renderWindow->SetWindowName("3D RRT Path Planning");
+        renderWindow->SetSize(1200, 900);
+        renderWindow->SetWindowName("3D RRT Path Planning - Interactive Visualization");
 
         interactor = vtkSmartPointer<vtkRenderWindowInteractor>::New();
         interactor->SetRenderWindow(renderWindow);
@@ -293,21 +318,23 @@ public:
             vtkSmartPointer<vtkInteractorStyleTrackballCamera>::New();
         interactor->SetInteractorStyle(style);
 
-        // Setup the scene
-        renderer->SetBackground(0.1, 0.2, 0.3); // Dark blue background
+        // Setup the scene with a gradient background
+        renderer->SetBackground(0.1, 0.2, 0.3);  // Dark blue background
+        renderer->SetBackground2(0.2, 0.3, 0.4); // Lighter blue for gradient
+        renderer->SetGradientBackground(true);
 
         // Add bounding box
         addBoundingBox();
 
-        // Add obstacles
+        // Add obstacles with their assigned colors
         for (const auto &sphere : spheres)
         {
-            addSphere(sphere, sphereRadius, 0.3, 0.3, 0.8); // Blue obstacles
+            addSphere(sphere, sphereRadius, sphere.color.r, sphere.color.g, sphere.color.b);
         }
 
-        // Add start and goal points
-        addSphere(startPoint, 0.5, 1.0, 0.0, 0.0); // Red start
-        addSphere(goalPoint, 0.5, 0.0, 1.0, 0.0);  // Green goal
+        // Add start and goal points with larger size and brighter colors
+        addSphere(startPoint, 1.0, 1.0, 0.0, 0.0); // Red start
+        addSphere(goalPoint, 1.0, 0.0, 1.0, 0.0);  // Green goal
 
         // Setup camera
         vtkSmartPointer<vtkCamera> camera = renderer->GetActiveCamera();
@@ -330,22 +357,36 @@ public:
         if (!visualize)
             return;
 
-        vtkSmartPointer<vtkSphereSource> sphereSource =
-            vtkSmartPointer<vtkSphereSource>::New();
+        vtkSmartPointer<vtkSphereSource> sphereSource = vtkSmartPointer<vtkSphereSource>::New();
         sphereSource->SetCenter(center.x, center.y, center.z);
         sphereSource->SetRadius(radius);
-        sphereSource->SetPhiResolution(20);
+        sphereSource->SetPhiResolution(20); // Higher resolution for smoother spheres
         sphereSource->SetThetaResolution(20);
 
-        vtkSmartPointer<vtkPolyDataMapper> mapper =
-            vtkSmartPointer<vtkPolyDataMapper>::New();
+        vtkSmartPointer<vtkPolyDataMapper> mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
         mapper->SetInputConnection(sphereSource->GetOutputPort());
 
-        vtkSmartPointer<vtkActor> actor =
-            vtkSmartPointer<vtkActor>::New();
+        vtkSmartPointer<vtkActor> actor = vtkSmartPointer<vtkActor>::New();
         actor->SetMapper(mapper);
+
+        // Set color and material properties
         actor->GetProperty()->SetColor(r, g, b);
-        actor->GetProperty()->SetOpacity(0.7);
+        actor->GetProperty()->SetAmbient(0.2);        // Ambient light reflection
+        actor->GetProperty()->SetDiffuse(0.7);        // Diffuse light reflection
+        actor->GetProperty()->SetSpecular(0.5);       // Specular light reflection
+        actor->GetProperty()->SetSpecularPower(20.0); // Specular power
+
+        // Set opacity - lower for obstacles, full for start/goal points
+        // Check if this is a start or goal point (which should be fully opaque)
+        bool isStartOrGoal = (center == startPoint || center == goalPoint);
+        if (!isStartOrGoal)
+        {
+            actor->GetProperty()->SetOpacity(0.4); // Semi-transparent obstacles
+        }
+        else
+        {
+            actor->GetProperty()->SetOpacity(1.0); // Fully opaque start/goal
+        }
 
         renderer->AddActor(actor);
     }
@@ -356,20 +397,33 @@ public:
         if (!visualize)
             return;
 
-        vtkSmartPointer<vtkLineSource> lineSource =
-            vtkSmartPointer<vtkLineSource>::New();
+        vtkSmartPointer<vtkLineSource> lineSource = vtkSmartPointer<vtkLineSource>::New();
         lineSource->SetPoint1(p1.x, p1.y, p1.z);
         lineSource->SetPoint2(p2.x, p2.y, p2.z);
 
-        vtkSmartPointer<vtkPolyDataMapper> mapper =
-            vtkSmartPointer<vtkPolyDataMapper>::New();
+        vtkSmartPointer<vtkPolyDataMapper> mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
         mapper->SetInputConnection(lineSource->GetOutputPort());
 
-        vtkSmartPointer<vtkActor> actor =
-            vtkSmartPointer<vtkActor>::New();
+        vtkSmartPointer<vtkActor> actor = vtkSmartPointer<vtkActor>::New();
         actor->SetMapper(mapper);
         actor->GetProperty()->SetColor(r, g, b);
         actor->GetProperty()->SetLineWidth(width);
+
+        // Make lines more visible with lighting effects
+        actor->GetProperty()->SetAmbient(0.6); // Higher ambient for better visibility
+        actor->GetProperty()->SetDiffuse(0.8);
+
+        // Check if this is a path line (usually colored differently than tree branches)
+        bool isPathLine = (r > 0.5 && g < 0.5 && b < 0.5); // Red lines are typically path lines
+        if (isPathLine)
+        {
+            actor->GetProperty()->SetLineWidth(width * 2.0); // Make path lines thicker
+            actor->GetProperty()->SetOpacity(1.0);           // Fully opaque
+        }
+        else
+        {
+            actor->GetProperty()->SetOpacity(0.8); // Slightly transparent for tree branches
+        }
 
         renderer->AddActor(actor);
     }
@@ -421,91 +475,70 @@ public:
     // Generate the RRT path
     std::vector<Point3D> generateRRT()
     {
-        // Check if start or goal is in collision
-        if (isCollided(startPoint) || isCollided(goalPoint))
-        {
-            std::cout << "Start or goal must not be in obstacle" << std::endl;
-            return std::vector<Point3D>();
-        }
-
         // Initialize visualization
         if (visualize)
         {
             initVisualization();
         }
 
-        // Initialize tree with start point
+        // Clear previous data
         vertices.clear();
         edges.clear();
+
+        // Add start point as the first vertex
         vertices.push_back(startPoint);
 
+        // Main RRT loop
         for (int i = 0; i < maxIterations; i++)
         {
-            // Determine the current goal sampling frequency
-            int currentFreq = goalSampleFreq;
+            // Generate random point (with goal biasing)
+            Point3D randPoint;
 
+            // Dynamic goal sampling frequency
+            int currentGoalFreq = goalSampleFreq;
             if (dynamicSampling)
             {
-                // Dynamic goal sampling frequency - decreases with iterations
-                // Linear interpolation between initial and final frequency based on progress
-                double progress = static_cast<double>(i) / maxIterations; // 0 at start, approaches 1 at end
-                currentFreq = static_cast<int>(initialSampleFreq - (initialSampleFreq - finalSampleFreq) * progress);
-                currentFreq = std::max(currentFreq, finalSampleFreq); // Ensure it doesn't go below final frequency
-
-                if (i % currentFreq == 0)
-                {
-                    std::cout << "Iteration " << i << ": Sampling goal point (current freq: " << currentFreq << ")" << std::endl;
-                }
+                // Linearly interpolate between initial and final frequencies
+                double progress = static_cast<double>(i) / maxIterations;
+                currentGoalFreq = initialSampleFreq + static_cast<int>((finalSampleFreq - initialSampleFreq) * progress);
+                currentGoalFreq = std::max(1, currentGoalFreq); // Ensure it's at least 1
             }
 
-            // Search through config space
-            Point3D randPoint;
-            bool isGoalSample = false;
-
-            if (i % currentFreq == 0)
+            // Goal biasing
+            if (i % currentGoalFreq == 0)
             {
-                // Sample goal with appropriate frequency
                 randPoint = goalPoint;
-                isGoalSample = true;
             }
             else
             {
-                // Sample random point
                 randPoint = generateRandomPoint();
             }
 
-            // Find nearest node in tree
+            // Find nearest node in the tree
             int nearestIndex = findNearestNode(randPoint);
             Point3D nearestPoint = vertices[nearestIndex];
 
-            // Check if tree can extend
+            // Try to extend the tree
             auto [canExtend, newNode] = canItExtend(randPoint, nearestPoint);
 
             if (canExtend)
             {
-                // Add new node to tree
+                // Add new node and edge
                 vertices.push_back(newNode);
                 edges.push_back(Edge(nearestIndex, vertices.size() - 1));
 
-                // Add line to visualization
+                // Visualize the new edge with color based on depth
                 if (visualize)
                 {
-                    if (isGoalSample)
-                    {
-                        // Goal-directed extension (green)
-                        addLine(nearestPoint, newNode, 0.0, 0.8, 0.0, 1.2);
-                    }
-                    else
-                    {
-                        // Random extension (black)
-                        addLine(nearestPoint, newNode, 0.0, 0.0, 0.0, 0.8);
-                    }
+                    // Calculate depth (distance from root) to determine color
+                    double depth = static_cast<double>(edges.size()) / maxIterations;
 
-                    // Update visualization more frequently
-                    if (i % 5 == 0)
-                    {
-                        updateVisualization();
-                    }
+                    // Gradient from blue (shallow) to green (deep)
+                    double r = 0.0;
+                    double g = 0.5 + depth * 0.5; // Increase green with depth
+                    double b = 0.8 - depth * 0.6; // Decrease blue with depth
+
+                    addLine(nearestPoint, newNode, r, g, b, 1.5);
                 }
 
                 // Check if reached goal
@@ -524,23 +557,17 @@ public:
                     }
                     break;
                 }
+
+                // Update visualization more frequently
+                if (i % 5 == 0)
+                {
+                    updateVisualization();
+                }
             }
         }
 
         // Find the path
-        std::vector<Point3D> path = findPath();
-
-        // Draw the final path
-        if (visualize && !path.empty())
-        {
-            for (size_t i = 0; i < path.size() - 1; i++)
-            {
-                addLine(path[i], path[i + 1], 1.0, 0.0, 0.0, 2.0); // Red path
-            }
-            updateVisualization();
-        }
-
-        return path;
+        return findPath();
     }
 
     // Find the path from the tree
@@ -589,6 +616,27 @@ public:
             std::reverse(path.begin(), path.end());
 
             std::cout << "Path found with " << path.size() << " waypoints!" << std::endl;
+
+            // Visualize the final path with a distinct color
+            if (visualize && !path.empty())
+            {
+                for (size_t i = 0; i < path.size() - 1; i++)
+                {
+                    // Use a bright red color with increased width for the final path
+                    addLine(path[i], path[i + 1], 1.0, 0.0, 0.0, 3.0);
+                }
+
+                // Add small spheres at each waypoint for better visibility
+                for (size_t i = 1; i < path.size() - 1; i++) // Skip start and goal which already have spheres
+                {
+                    // Use orange color for waypoints
+                    addSphere(path[i], 0.3, 1.0, 0.5, 0.0);
+                }
+
+                updateVisualization();
+                std::cout << "Path successfully found!" << std::endl;
+            }
+
             return path;
         }
 
