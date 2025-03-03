@@ -340,12 +340,27 @@ public:
         addSphere(startPoint, 1.0, 1.0, 0.0, 0.0); // Red start
         addSphere(goalPoint, 1.0, 0.0, 1.0, 0.0);  // Green goal
 
-        // Setup camera
+        // Setup camera to match the rotation animation view
         vtkSmartPointer<vtkCamera> camera = renderer->GetActiveCamera();
-        camera->SetPosition(boundary[1] * 2.0, boundary[3] * 1.5, boundary[5] * 3.0);
-        camera->SetFocalPoint((boundary[0] + boundary[1]) / 2,
-                              (boundary[2] + boundary[3]) / 2,
-                              (boundary[4] + boundary[5]) / 2);
+
+        // Calculate the center of the workspace as the focal point
+        double focalX = (boundary[0] + boundary[1]) / 2.0;
+        double focalY = (boundary[2] + boundary[3]) / 2.0;
+        double focalZ = (boundary[4] + boundary[5]) / 2.0;
+
+        // Use same parameters as in rotation animation
+        double radius = 150.0; // Match InitialDistance in animation
+        double elevation = 50.0;
+        double initialAngle = 0.0; // Start at 0 degrees in the circle
+
+        // Set camera position to match the animation's first frame
+        camera->SetPosition(
+            focalX + radius * cos(vtkMath::RadiansFromDegrees(initialAngle)),
+            focalY + radius * sin(vtkMath::RadiansFromDegrees(initialAngle)),
+            focalZ + elevation);
+
+        // Set focal point to center of workspace
+        camera->SetFocalPoint(focalX, focalY, focalZ);
         camera->SetViewUp(0, 0, 1);
 
         // Initialize interactor
