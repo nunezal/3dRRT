@@ -20,6 +20,10 @@
 #include <vtkCommand.h>
 #include <thread>
 
+// Forward declaration of the startRotationAnimation function
+void startRotationAnimation(vtkSmartPointer<vtkRenderer> renderer,
+                            vtkSmartPointer<vtkRenderWindowInteractor> interactor);
+
 // Structure to represent a color
 struct Color
 {
@@ -298,6 +302,39 @@ public:
         return nodes[fromIndex].cost + nodes[fromIndex].point.distanceTo(to);
     }
 
+    // Check if a line segment between two points collides with any obstacle
+    // Returns a pair: {collided, lastValidPoint}
+    std::pair<bool, Point3D> checkLineCollision(const Point3D &p1, const Point3D &p2) const
+    {
+        // Number of collision check points along the line
+        const int numChecks = 20;
+        Point3D lastValidPoint = p1;
+
+        for (int i = 1; i <= numChecks; i++)
+        {
+            // Interpolate point along the line
+            double t = static_cast<double>(i) / numChecks;
+            Point3D checkPoint = p1 * (1.0 - t) + p2 * t;
+
+            // Check if this point collides with any obstacle
+            if (isCollided(checkPoint))
+            {
+                return {true, lastValidPoint};
+            }
+
+            lastValidPoint = checkPoint;
+        }
+
+        return {false, p2}; // No collision, return the target point
+    }
+
+    // Original line collision check (keep for compatibility with existing code)
+    bool isLineCollided(const Point3D &p1, const Point3D &p2) const
+    {
+        auto [collided, _] = checkLineCollision(p1, p2);
+        return collided;
+    }
+
     // Extend tree toward random point
     std::pair<bool, Point3D> extendToward(const Point3D &randPoint, const Point3D &nearestPoint)
     {
@@ -305,28 +342,48 @@ public:
         Point3D dir = randPoint - nearestPoint;
         double dist = dir.norm();
 
-        // If distance is less than branch length, return random point
+        Point3D targetPoint;
+        // If distance is less than branch length, use random point as target
         if (dist <= branchLength)
         {
-            // Check for collision
-            if (!isCollided(randPoint))
+            targetPoint = randPoint;
+        }
+        else
+        {
+            // Normalize direction and scale by branch length
+            dir = dir.normalize() * branchLength;
+            targetPoint = nearestPoint + dir;
+        }
+
+        // Check for point collision at the target first
+        if (isCollided(targetPoint))
+        {
+            // If the target point itself collides, check for the last valid point along the path
+            auto [collided, lastValidPoint] = checkLineCollision(nearestPoint, targetPoint);
+
+            // If we found a valid point that's not the starting point
+            if (lastValidPoint.distanceTo(nearestPoint) > 0.05)
             {
-                return {true, randPoint};
+                return {true, lastValidPoint};
             }
             return {false, Point3D()};
         }
 
-        // Normalize direction and scale by branch length
-        dir = dir.normalize() * branchLength;
-        Point3D newPoint = nearestPoint + dir;
+        // Now check for line collision
+        auto [lineCollided, lastValidPoint] = checkLineCollision(nearestPoint, targetPoint);
 
-        // Check for collision
-        if (!isCollided(newPoint))
+        if (lineCollided)
         {
-            return {true, newPoint};
+            // If we found a valid point that's not too close to the starting point
+            if (lastValidPoint.distanceTo(nearestPoint) > 0.05)
+            {
+                return {true, lastValidPoint};
+            }
+            return {false, Point3D()};
         }
 
-        return {false, Point3D()};
+        // No collision at all, return the target point
+        return {true, targetPoint};
     }
 
     // Generate random point in configuration space
@@ -363,6 +420,10 @@ public:
         // Create a renderer, render window, and interactor
         renderer = vtkSmartPointer<vtkRenderer>::New();
         renderWindow = vtkSmartPointer<vtkRenderWindow>::New();
+
+        // Increase the window size to make visualization larger
+        renderWindow->SetSize(1200, 900);
+
         renderWindow->AddRenderer(renderer);
         interactor = vtkSmartPointer<vtkRenderWindowInteractor>::New();
         interactor->SetRenderWindow(renderWindow);
@@ -413,6 +474,13 @@ public:
             vtkSmartPointer<vtkActor>::New();
         actor->SetMapper(mapper);
         actor->GetProperty()->SetColor(r, g, b);
+
+        // Make obstacles semi-transparent (0.4 opacity)
+        // Start and goal points remain fully opaque
+        if (!(center == startPoint || center == goalPoint))
+        {
+            actor->GetProperty()->SetOpacity(0.4);
+        }
 
         // Add the actor to the scene
         renderer->AddActor(actor);
@@ -490,9 +558,10 @@ public:
         // Add bounding box
         addBoundingBox();
 
-        // Add obstacles
+        // Add obstacles - use the sphereRadius property from the class
         for (const auto &sphere : spheres)
         {
+            // Use the color property from the Point3D struct
             addSphere(sphere, sphereRadius, sphere.color.r, sphere.color.g, sphere.color.b);
         }
 
@@ -552,7 +621,7 @@ public:
                 for (int neighborIdx : neighbors)
                 {
                     double newCost = getNewPathCost(neighborIdx, newPoint);
-                    if (newCost < minCost && !isCollided(newPoint))
+                    if (newCost < minCost && !isLineCollided(nodes[neighborIdx].point, newPoint))
                     {
                         minCost = newCost;
                         minCostIndex = neighborIdx;
@@ -571,7 +640,7 @@ public:
                     {
                         double costThroughNew = minCost + newPoint.distanceTo(nodes[neighborIdx].point);
 
-                        if (costThroughNew < nodes[neighborIdx].cost && !isCollided(newPoint))
+                        if (costThroughNew < nodes[neighborIdx].cost && !isLineCollided(nodes[neighborIdx].point, newPoint))
                         {
                             // Update parent and cost
                             int oldParent = nodes[neighborIdx].parent;
@@ -606,12 +675,6 @@ public:
                     // In RRT*, we don't break immediately upon finding a path
                 }
             }
-
-            // // Update visualization occasionally
-            // if (visualize && iteration % 50 == 0)
-            // {
-            //     updateVisualization();
-            // }
 
             iteration++;
         }
@@ -699,8 +762,11 @@ public:
     {
         if (visualize)
         {
-            interactor->Initialize();
-            interactor->Start();
+            std::cout << "Starting interactive view with automatic rotation" << std::endl;
+            std::cout << "Press 'e' to exit the application" << std::endl;
+
+            // Use the rotation animation instead of just starting the interactor
+            startRotationAnimation(renderer, interactor);
         }
     }
 };
@@ -718,24 +784,23 @@ public:
 
     void Execute(vtkObject *vtkNotUsed(caller), unsigned long eventId, void *vtkNotUsed(callData)) override
     {
-        if (eventId != vtkCommand::TimerEvent || !Camera || !Renderer)
-            return;
+        if (vtkCommand::TimerEvent == eventId)
+        {
+            Angle = (Angle + 1) % 360;
 
-        // Increment the angle
-        Angle = (Angle + 1) % 360;
+            if (Camera && Renderer)
+            {
+                double elevation = 10.0;
+                Camera->SetPosition(
+                    150.0 * cos(vtkMath::RadiansFromDegrees(static_cast<double>(Angle))),
+                    150.0 * sin(vtkMath::RadiansFromDegrees(static_cast<double>(Angle))),
+                    50.0);
+                Camera->SetViewUp(0, 0, 1);
 
-        // Position camera at a fixed distance from the focal point
-        double distance = 100.0;
-        double angle = Angle * vtkMath::Pi() / 180.0;
-        double camX = distance * cos(angle);
-        double camY = distance * sin(angle);
-
-        Camera->SetPosition(camX, camY, 50.0);
-        Camera->SetViewUp(0, 0, 1);
-
-        // Render the scene
-        Renderer->ResetCameraClippingRange();
-        Renderer->GetRenderWindow()->Render();
+                Renderer->ResetCameraClippingRange();
+                Renderer->GetRenderWindow()->Render();
+            }
+        }
     }
 
     void SetCamera(vtkCamera *camera) { Camera = camera; }

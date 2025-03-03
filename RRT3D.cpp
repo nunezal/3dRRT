@@ -20,6 +20,10 @@
 #include <vtkCommand.h>
 #include <thread>
 
+// Forward declarations
+void startRotationAnimation(vtkSmartPointer<vtkRenderer> renderer,
+                            vtkSmartPointer<vtkRenderWindowInteractor> interactor);
+
 // Structure to represent a color
 struct Color
 {
@@ -338,7 +342,7 @@ public:
 
         // Setup camera
         vtkSmartPointer<vtkCamera> camera = renderer->GetActiveCamera();
-        camera->SetPosition(boundary[1] * 1.5, boundary[3] * 1.5, boundary[5] * 1.5);
+        camera->SetPosition(boundary[1] * 2.0, boundary[3] * 1.5, boundary[5] * 3.0);
         camera->SetFocalPoint((boundary[0] + boundary[1]) / 2,
                               (boundary[2] + boundary[3]) / 2,
                               (boundary[4] + boundary[5]) / 2);
@@ -649,9 +653,9 @@ public:
     {
         if (visualize)
         {
-            std::cout << "Starting interactive view - click and drag to rotate" << std::endl;
+            std::cout << "Starting automatic rotation animation - path found!" << std::endl;
             std::cout << "Press 'e' to exit the application" << std::endl;
-            interactor->Start();
+            startRotationAnimation(renderer, interactor);
         }
     }
 };
@@ -665,7 +669,7 @@ public:
         return new vtkAnimationCallback;
     }
 
-    vtkAnimationCallback() : Camera(nullptr), Renderer(nullptr), Angle(0) {}
+    vtkAnimationCallback() : Camera(nullptr), Renderer(nullptr), Angle(0), InitialDistance(150.0), FocalPointInitialized(false) {}
 
     void Execute(vtkObject *vtkNotUsed(caller), unsigned long eventId, void *vtkNotUsed(callData)) override
     {
@@ -675,14 +679,32 @@ public:
 
             if (Camera && Renderer)
             {
-                double elevation = 10.0;
+                // Store initial focal point on first execution
+                if (!FocalPointInitialized)
+                {
+                    double *focalPoint = Camera->GetFocalPoint();
+                    FocalPoint[0] = focalPoint[0];
+                    FocalPoint[1] = focalPoint[1];
+                    FocalPoint[2] = focalPoint[2];
+                    FocalPointInitialized = true;
+                }
+
+                // Fixed distance and elevation
+                double radius = InitialDistance;
+                double elevation = 50.0;
+
+                // Compute new camera position while keeping the same focal point
                 Camera->SetPosition(
-                    150.0 * cos(vtkMath::RadiansFromDegrees(static_cast<double>(Angle))),
-                    150.0 * sin(vtkMath::RadiansFromDegrees(static_cast<double>(Angle))),
-                    50.0);
+                    FocalPoint[0] + radius * cos(vtkMath::RadiansFromDegrees(static_cast<double>(Angle))),
+                    FocalPoint[1] + radius * sin(vtkMath::RadiansFromDegrees(static_cast<double>(Angle))),
+                    FocalPoint[2] + elevation);
+                Camera->SetFocalPoint(FocalPoint);
                 Camera->SetViewUp(0, 0, 1);
 
-                Renderer->ResetCameraClippingRange();
+                // Don't reset camera clipping range as it can cause zooming
+                // Instead of Renderer->ResetCameraClippingRange();
+
+                // Just render the window
                 Renderer->GetRenderWindow()->Render();
             }
         }
@@ -695,6 +717,9 @@ private:
     vtkCamera *Camera;
     vtkRenderer *Renderer;
     int Angle;
+    double InitialDistance;
+    double FocalPoint[3];
+    bool FocalPointInitialized;
 };
 
 // Helper function to start the rotation animation
@@ -707,7 +732,10 @@ void startRotationAnimation(vtkSmartPointer<vtkRenderer> renderer,
     animationCallback->SetCamera(renderer->GetActiveCamera());
     animationCallback->SetRenderer(renderer);
 
-    // Create a timer for animation
+    // Set final window title
+    renderer->GetRenderWindow()->SetWindowName("3D RRT Path Planning - Path Found (Rotating View)");
+
+    // Create a timer for animation without resetting anything
     interactor->Initialize();
     interactor->CreateRepeatingTimer(30); // 30ms timer (approximately 33 fps)
     interactor->AddObserver(vtkCommand::TimerEvent, animationCallback);
